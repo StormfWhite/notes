@@ -164,6 +164,7 @@ mark[data-hl="b"] { color: var(--hl-b); background: color-mix(in srgb, var(--hl-
 #connect img { width: 96px; height: 96px; border-radius: 22px; box-shadow: var(--shadow); }
 #connect h1 { margin: 6px 0 0; font-size: 28px; }
 #connect p { margin: 0; color: var(--second); max-width: 330px; }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; box-sizing: border-box; }
 .btn { height: 50px; border-radius: 25px; padding: 0 26px; background: var(--tint); color: #000; font-weight: 600; min-width: 220px; }
 .btn.alt { background: var(--fill); color: var(--label); }
 #code { width: 100%; max-width: 330px; height: 50px; border-radius: 14px; border: .5px solid var(--sep); background: var(--cell);
@@ -176,8 +177,8 @@ mark[data-hl="b"] { color: var(--hl-b); background: color-mix(in srgb, var(--hl-
   <img src="icon-180.png" alt="">
   <h1>Shared Notes</h1>
   <p>Notes Storm and you both see and edit. Connect once to the Dropbox where they live.</p>
-  <button class="btn" id="go-auth">Connect Dropbox</button>
-  <div id="code-step" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%">
+  <a class="btn" id="go-auth" target="_blank" rel="noopener">Connect Dropbox</a>
+  <div id="code-step" style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%">
     <p>Tap <b>Allow</b>, copy the code Dropbox shows, then paste it here.</p>
     <input id="code" placeholder="Paste code" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button class="btn" id="finish-auth">Done</button>

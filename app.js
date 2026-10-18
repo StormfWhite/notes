@@ -503,17 +503,25 @@ function edited(id, fn) {
 
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-async function startAuth() {
-  const v = b64url(crypto.getRandomValues(new Uint8Array(48)));
-  sessionStorage.setItem("pkce", v); localStorage.setItem(LS + ".pkce", v);
+// The Dropbox link is built BEFORE the tap and Connect is a real link to it: an iPhone opens a new
+// window only straight from a tap, and the old button awaited SHA-256 first, so iOS silently
+// blocked it -- Joanna never got connected (2026-10-18). The verifier is kept 30 min while a
+// sign-in is pending, so the app reloading while Dropbox is open doesn't void the code.
+async function prepareAuth() {
+  const kept = localStorage.getItem(LS + ".pkce"), at = +localStorage.getItem(LS + ".pkce.at") || 0;
+  const v = kept && Date.now() - at < 30 * 60 * 1000 ? kept : b64url(crypto.getRandomValues(new Uint8Array(48)));
+  if (v !== kept) { localStorage.setItem(LS + ".pkce", v); localStorage.setItem(LS + ".pkce.at", String(Date.now())); }
   const ch = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)));
-  const url = "https://www.dropbox.com/oauth2/authorize?" + new URLSearchParams({
+  $("#go-auth").href = "https://www.dropbox.com/oauth2/authorize?" + new URLSearchParams({
     client_id: APP_KEY, response_type: "code", token_access_type: "offline", code_challenge_method: "S256", code_challenge: ch,
   });
-  window.open(url, "_blank");
-  $("#code-step").classList.remove("hidden");
-  $("#go-auth").classList.add("alt");
-  $("#go-auth").textContent = "Open Dropbox Again";
+}
+
+function startAuth(e) {
+  const go = $("#go-auth");
+  if (!go.href) { e.preventDefault(); prepareAuth().then(() => window.open(go.href, "_blank")); }
+  go.classList.add("alt");
+  go.textContent = "Open Dropbox Again";
 }
 
 async function finishAuth() {
@@ -529,7 +537,7 @@ async function finishAuth() {
     const o = await r.json();
     if (!r.ok) throw new Error(o.error_description || o.error || r.status);
     S.refresh = o.refresh_token; S.access = o.access_token; S.exp = Date.now() + (o.expires_in - 120) * 1000;
-    localStorage.removeItem(LS + ".pkce");
+    localStorage.removeItem(LS + ".pkce"); localStorage.removeItem(LS + ".pkce.at");
     persist();
     show();
     sync().then(longpoll);
@@ -946,6 +954,7 @@ function highlight(code) {
 function show() {
   const authed = !!S.refresh;
   $("#connect").classList.toggle("hidden", authed);
+  if (!authed && !$("#go-auth").href) prepareAuth();
   $("#list").classList.toggle("hidden", !authed);
   if (authed) renderList();
 }
