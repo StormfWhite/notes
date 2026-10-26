@@ -103,7 +103,86 @@ function parseBody(md) {
   return out;
 }
 
-/** '**a** _b_ ==p:c==' → runs [{t, b, i, u, s, hl}] — the phone's inline rules. */
+// Links — same rules as the phone (Rich.findLink / linkLabel) and laptop (find_link / link_label).
+// On disk: [label](url) · <url> · a bare url. Shown as a label (a short what-it-is one for a bare url);
+// written back as the file had it unless the label was changed.
+const LINK = /\[([^\]\n]*)\]\(((?:https?:\/\/|www\.)(?:[^()\s]|\([^()\s]*\))+)\)|<((?:https?:\/\/|www\.)[^<>\s]+)>|((?:https?:\/\/|www\.)\S+)/y;
+const SLUG_SKIP = new Set(["p", "dp", "product", "products", "item", "items", "shop", "collections", "index", "en", "us", "watch"]);
+
+/** The link starting at s[i] as {end, url, src, shown}, or null. */
+function findLink(s, i) {
+  if (!"[<hw".includes(s[i])) return null;
+  if (i && /[\p{L}\p{N}\/]/u.test(s[i - 1])) return null;
+  LINK.lastIndex = i;
+  const m = LINK.exec(s);
+  if (!m) return null;
+  if (m[2] !== undefined) {
+    const label = m[1].trim();
+    return { end: i + m[0].length, url: m[2], src: m[0], shown: label && label !== m[2] ? label : linkLabel(m[2]) };
+  }
+  if (m[3] !== undefined) return { end: i + m[0].length, url: m[3], src: m[0], shown: linkLabel(m[3]) };
+  let url = m[4];
+  const count = (c) => url.split(c).length - 1;
+  while (url && (".,;:!?'\"*~=>]".includes(url[url.length - 1]) || (url.endsWith(")") && count(")") > count("(")))) url = url.slice(0, -1);
+  if (url.length < 8) return null;
+  return { end: i + url.length, url, src: url, shown: linkLabel(url) };
+}
+
+const decodeSeg = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
+
+/** "https://www.lecreuset.com/cookware/dutch-ovens" → "dutch ovens · lecreuset.com"; a Google search → its query. */
+function linkLabel(url) {
+  let u = url.includes("://") ? url.slice(url.indexOf("://") + 3) : url;
+  let cut = u.length;
+  for (const ch of "/?#") { const k = u.indexOf(ch); if (k >= 0) cut = Math.min(cut, k); }
+  let host = u.slice(0, cut).toLowerCase(), rest = u.slice(cut);
+  if (host.includes("@")) host = host.slice(host.lastIndexOf("@") + 1);
+  if (host.includes(":")) host = host.slice(0, host.indexOf(":"));
+  if (host.startsWith("www.")) host = host.slice(4);
+  if (rest.includes("#")) rest = rest.slice(0, rest.indexOf("#"));
+  const qm = rest.indexOf("?");
+  const path = qm >= 0 ? rest.slice(0, qm) : rest, query = qm >= 0 ? rest.slice(qm + 1) : "";
+  if (/^(.+\.)?google\./.test(host) && ["/search", "/url", "/", ""].includes(path))
+    for (const kv of query.split("&"))
+      if (kv.startsWith("q=") && kv.length > 2) {
+        const q = decodeSeg(kv.slice(2).replace(/\+/g, " ")).trim();
+        if (q) return q.slice(0, 60);
+      }
+  if (host === "youtu.be" || (/^(m\.)?youtube\.com$/.test(host) && /^\/(watch|shorts\/)/.test(path))) return "YouTube video";
+  let name = "";
+  const segs = path.split("/");
+  for (let k = segs.length - 1; k >= 0; k--) {
+    const seg = decodeSeg(segs[k]).replace(/\.(html?|php|aspx?)$/, "");
+    if (!seg || SLUG_SKIP.has(seg.toLowerCase()) || /^(?:[a-z]{2}(-[a-z]{2})?|\P{L}+)$/iu.test(seg) || seg.includes("=")
+        || /^(?=.*\d)[A-Za-z0-9]{8,}$/.test(seg) || (seg.length > 24 && !/[-_+ ]/.test(seg))) continue;   // ids / hashes say nothing
+    name = seg.replace(/[-_+]+/g, " ").trim();
+    const words = name.split(/\s+/);
+    if (words.length > 1 && /^(?:\d+|(?=.*\d)[0-9a-f]{8,})$/.test(words[words.length - 1]))
+      name = name.slice(0, name.lastIndexOf(words[words.length - 1])).trim();
+    break;
+  }
+  if (name.length > 48) name = name.slice(0, 47).trim() + "…";
+  return name ? `${name} · ${host}` : host || url;
+}
+
+/** A line with every link as its label (shown) or its bare url. */
+function linkText(line, shown = true) {
+  let o = "", i = 0;
+  while (i < line.length) {
+    const lk = findLink(line, i);
+    if (lk) { o += shown ? lk.shown : lk.url; i = lk.end; } else o += line[i++];
+  }
+  return o;
+}
+
+/** A link run back to Markdown: untouched → as the file had it; relabelled → [label](url). */
+function linkMd(r) {
+  const k = r.shown ? r.t.indexOf(r.shown) : -1;
+  if (k >= 0) return r.t.slice(0, k) + r.src + r.t.slice(k + r.shown.length);
+  return r.t.trim() ? `[${r.t}](${r.href})` : "";
+}
+
+/** '**a** _b_ ==p:c==' → runs [{t, b, i, u, s, hl}] (+ href/src/shown on a link) — the phone's inline rules. */
 function parseInline(s) {
   const on = [false, false, false, false];
   let hl = "", buf = "", i = 0;
@@ -117,6 +196,13 @@ function parseInline(s) {
     return false;
   };
   while (i < s.length) {
+    const lk = findLink(s, i);
+    if (lk) {   // a link is literal: no style toggles inside it
+      flush();
+      out.push({ t: lk.shown, b: on[0], i: on[1], u: on[2], s: on[3], hl, href: lk.url, src: lk.src, shown: lk.shown });
+      i = lk.end;
+      continue;
+    }
     if (!hl && s.startsWith("==", i) && i + 3 < s.length && HL_CODES.includes(s[i + 2]) && s[i + 3] === ":" && s.indexOf("==", i + 4) > 0) {
       flush(); hl = s[i + 2]; i += 4; continue;
     }
@@ -150,7 +236,7 @@ function runsToMd(runs) {
     if (change && r.hl) o += `==${r.hl}:`;
     hl = r.hl || "";
     for (let k = 0; k < 4; k++) if (want[k] && !on[k]) { o += opens[k]; on[k] = true; }
-    o += r.t;
+    o += r.href ? linkMd(r) : r.t;
   }
   for (let k = 3; k >= 0; k--) if (on[k]) o += closes[k];
   if (hl) o += "==";
@@ -162,6 +248,7 @@ const TAG = /(?<![\w#/&])#(?!(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3}(?
 function runsToHtml(runs) {
   return runs.map((r) => {
     let h = esc(r.t);
+    if (r.href) h = `<a href="${esc(/^https?:/.test(r.href) ? r.href : "https://" + r.href)}" data-url="${esc(r.href)}" data-src="${esc(r.src)}" data-shown="${esc(r.shown)}" contenteditable="false">${h}</a>`;
     if (r.s) h = `<s>${h}</s>`;
     if (r.u) h = `<u>${h}</u>`;
     if (r.i) h = `<i>${h}</i>`;
@@ -183,6 +270,11 @@ function domRuns(node) {
     if (n.nodeType !== 1) return;
     const tag = n.tagName;
     if (tag === "BR") { out.push({ t: "\n", ...st }); return; }
+    if (tag === "A" && n.dataset.src !== undefined) {   // a link stays one run, with what the file had
+      const t = n.textContent.replace(/ /g, " ").replace(/​/g, "");
+      if (t) out.push({ t, ...st, href: n.dataset.url, src: n.dataset.src, shown: n.dataset.shown });
+      return;
+    }
     const s2 = { ...st };
     const fw = n.style && n.style.fontWeight;
     if (tag === "B" || tag === "STRONG" || fw === "bold" || Number(fw) >= 600) s2.b = true;
@@ -196,7 +288,7 @@ function domRuns(node) {
   const merged = [];   // join neighbours with the same style
   for (const r of out) {
     const p = merged[merged.length - 1];
-    if (p && p.b === r.b && p.i === r.i && p.u === r.u && p.s === r.s && p.hl === r.hl) p.t += r.t;
+    if (p && !p.href && !r.href && p.b === r.b && p.i === r.i && p.u === r.u && p.s === r.s && p.hl === r.hl) p.t += r.t;
     else merged.push({ ...r });
   }
   return merged;
@@ -206,7 +298,7 @@ function domRuns(node) {
 function plain(line) {
   if (TABLE_SEP.test(line)) return "";
   if (TABLE_ROW.test(line)) line = tableCells(line).join("  ").replace(/<br\s*\/?>/gi, " ");
-  let t = line.trim().replace(/^#{1,3} /, "").replace(/^- \[[ xX]\] /, "").replace(/^([*>-]|\d+\.) /, "")
+  let t = linkText(line.trim()).replace(/^#{1,3} /, "").replace(/^- \[[ xX]\] /, "").replace(/^([*>-]|\d+\.) /, "")
     .replace(/^`` /, "").split("**").join("").split("~~").join("").replace(/<\/?u>/g, "").replace(/==[pkomb]:/g, "").split("==").join("");
   return t.replace(/(?<![\w])_(\S[^_]*)_(?![\w])/g, "$1").trim();
 }
@@ -848,6 +940,10 @@ ed.addEventListener("touchstart", (e) => {
   holdT = setTimeout(() => tableMenu(td), 550);
 }, { passive: true });
 for (const ev of ["touchmove", "touchend", "touchcancel"]) ed.addEventListener(ev, () => clearTimeout(holdT), { passive: true });
+ed.addEventListener("click", (e) => {   // links open (a contenteditable page won't follow them by itself)
+  const a = e.target.closest && e.target.closest("a[data-src]");
+  if (a) { e.preventDefault(); window.open(a.href, "_blank", "noopener"); }
+});
 ed.addEventListener("contextmenu", (e) => { const td = e.target.closest && e.target.closest("td"); if (td) { e.preventDefault(); tableMenu(td); } });
 
 function tableMenu(td) {
