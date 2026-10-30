@@ -11,14 +11,16 @@ self.addEventListener("activate", (e) => {
     .then(() => self.clients.claim()));
 });
 
-// the shell: network first (so updates land), the cache when offline. Dropbox calls pass straight through.
+// the shell: the saved copy answers at once and a fresh one is fetched behind it, so a launch never waits on
+// the network and an update lands on the next launch. Dropbox calls pass straight through.
 self.addEventListener("fetch", (e) => {
   const u = new URL(e.request.url);
   if (e.request.method !== "GET" || u.origin !== location.origin) return;
-  e.respondWith(fetch(e.request).then((r) => {
-    if (r.ok) { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); }
-    return r;
-  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match("index.html"))));
+  e.respondWith(caches.open(VERSION).then((c) => c.match(e.request, { ignoreSearch: true }).then((hit) => {
+    const fresh = fetch(e.request).then((r) => { if (r.ok) c.put(e.request, r.clone()); return r; });
+    if (hit) { e.waitUntil(fresh.catch(() => {})); return hit; }
+    return fresh.catch(() => c.match("index.html"));
+  })));
 });
 
 self.addEventListener("push", (e) => {
