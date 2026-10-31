@@ -1,5 +1,5 @@
 // Shared Notes service worker: the app shell offline, and Storm's edits as notifications.
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL = ["./", "index.html", "app.js", "vendor/jszip.min.js", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
